@@ -384,7 +384,7 @@ class _StockHomePageState extends State<StockHomePage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Stock App'),
+        title: const Text('135 Stock Updater'),
         actions: [
           IconButton(
             icon: const Icon(Icons.settings),
@@ -404,7 +404,7 @@ class _StockHomePageState extends State<StockHomePage> {
                   style: const TextStyle(fontSize: 20),
                   children: [
                     TextSpan(
-                      text: savedName.isNotEmpty ? savedName : 'User',
+                      text: savedName.isNotEmpty ? savedName : 'no name. Go To Settings.',
                       style: const TextStyle(
                         fontWeight: FontWeight.bold,
                         fontSize: 20,
