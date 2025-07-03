@@ -5,6 +5,7 @@ import 'package:nfc_manager/nfc_manager.dart';
 import 'package:gsheets/gsheets.dart';
 import 'dart:convert';
 import 'package:intl/intl.dart';
+import 'package:app_links/app_links.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:nfc_manager_ndef/nfc_manager_ndef.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -14,18 +15,66 @@ void main() {
   runApp(const MyApp());
 }
 
-class MyApp extends StatelessWidget {
+class MyApp extends StatefulWidget {
   const MyApp({super.key});
 
   @override
+  State<MyApp> createState() => _MyAppState();
+}
+
+class _MyAppState extends State<MyApp> {
+  String? initialPayload;
+  late final AppLinks appLinks;
+  final GlobalKey<_StockHomePageState> _stockHomePageKey = GlobalKey();
+  @override
+  void initState() {
+    super.initState();
+    appLinks = AppLinks();
+    _handleInitialLinks();
+  }
+
+  Future<void> _handleInitialLinks() async {
+     try {
+      // Initial link (e.g., app booted from stock135:// URI)
+      final initialUri = await appLinks.getInitialLink();
+      if (initialUri != null && initialUri.scheme == 'stock135') {
+        setState(() {
+          initialPayload = initialUri.path + (initialUri.query.isNotEmpty ? '?${initialUri.query}' : '');
+        });
+      }
+    } catch (e) {
+      debugPrint("Error parsing initial app link: $e");
+    }
+
+    // Ongoing link stream while app is running
+    appLinks.uriLinkStream.listen((Uri uri) {
+      if (uri.scheme == 'stock135') {
+        final livePayload = uri.path + (uri.query.isNotEmpty ? '?${uri.query}' : '');
+        debugPrint("Live app link received: $livePayload");
+
+        // If StockHomePage is already mounted, pass it to the handler
+        final state = _stockHomePageKey.currentState;
+        state?._processNfcContent(livePayload);
+      }
+    }, onError: (err) {
+      debugPrint("Error listening for app links: $err");
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return MaterialApp(home: const StockHomePage());
+    return MaterialApp(
+      home: StockHomePage(
+        key: _stockHomePageKey,
+        initialPayload: initialPayload,
+      ),
+    );
   }
 }
 
 class StockHomePage extends StatefulWidget {
-  const StockHomePage({super.key});
-
+  final String? initialPayload;
+  const StockHomePage({super.key, this.initialPayload});
   @override
   State<StockHomePage> createState() => _StockHomePageState();
 }
@@ -53,6 +102,9 @@ class _StockHomePageState extends State<StockHomePage> {
           });
           if (kDebugMode) {
             print("Google Sheets initialized successfully.");
+          }
+          if (widget.initialPayload != null) {
+            _processNfcContent(widget.initialPayload!);
           }
         })
         .catchError((error) {
@@ -142,7 +194,7 @@ class _StockHomePageState extends State<StockHomePage> {
         if (message.records.isNotEmpty) {
           final record = message.records.first;
           final payload = String.fromCharCodes(
-            record.payload.skip(2),
+            record.payload.skip(3),
           ); // may need to be 3 to skip language code...
           if (kDebugMode) {
             print("NFC Tag content: $payload");
@@ -404,7 +456,9 @@ class _StockHomePageState extends State<StockHomePage> {
                   style: const TextStyle(fontSize: 20),
                   children: [
                     TextSpan(
-                      text: savedName.isNotEmpty ? savedName : 'no name. Go To Settings.',
+                      text: savedName.isNotEmpty
+                          ? savedName
+                          : 'no name. Go To Settings.',
                       style: const TextStyle(
                         fontWeight: FontWeight.bold,
                         fontSize: 20,
@@ -433,7 +487,7 @@ class _StockHomePageState extends State<StockHomePage> {
                   child: const Text('Lookup Part'),
                 ),
               ],
-              
+
               const SizedBox(height: 24),
               if (partInfo != null) ...[
                 Text('Part: ${partInfo!['name']}'),
@@ -545,33 +599,18 @@ class _SettingsPageState extends State<SettingsPage> {
               throw 'This tag is not writable';
             }
 
-            final languageCode = 'en';
-            final textBytes = utf8.encode(content);
-            final languageCodeBytes = utf8.encode(languageCode);
+            final content = '${partNameController.text.trim()}|$selectedAction';
 
-            final payloadLength =
-                1 + languageCodeBytes.length + textBytes.length;
-            final payload = Uint8List(payloadLength);
-
-            payload[0] = languageCodeBytes.length;
-            payload.setRange(
-              1,
-              1 + languageCodeBytes.length,
-              languageCodeBytes,
-            );
-            payload.setRange(
-              1 + languageCodeBytes.length,
-              payloadLength,
-              textBytes,
-            );
+            final uri = Uri.parse('stock135://$content');
+            final uriBytes = utf8.encode(uri.toString());
 
             final message = NdefMessage(
               records: [
                 NdefRecord(
                   typeNameFormat: TypeNameFormat.wellKnown,
-                  type: Uint8List.fromList([0x54]), // 'T' for Text record
+                  type: Uint8List.fromList([0x55]), // '0x55' is for URI type
                   identifier: Uint8List(0),
-                  payload: payload,
+                  payload: Uint8List.fromList(uriBytes),
                 ),
               ],
             );
@@ -631,7 +670,7 @@ class _SettingsPageState extends State<SettingsPage> {
               decoration: InputDecoration(
                 labelText: 'Your Name',
                 helperText: 'This will be saved for future sessions',
-                errorText: hasError
+                errorText: hasError,
               ),
               onChanged: (name) async {
                 final success = await widget.onNameChanged(name);
@@ -639,7 +678,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   setState(() {
                     hasError = 'Invalid name format. Use "First Last" format.';
                   });
-                }else{
+                } else {
                   setState(() {
                     hasError = null;
                   });
