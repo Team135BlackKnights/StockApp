@@ -1,3 +1,5 @@
+import 'dart:developer';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:nfc_manager/ndef_record.dart';
@@ -29,35 +31,65 @@ class _MyAppState extends State<MyApp> {
   void initState() {
     super.initState();
     appLinks = AppLinks();
-    _handleInitialLinks();
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final state = _stockHomePageKey.currentState;
+      if (state != null) {
+        state
+            .initSheets()
+            .then((_) {
+              setState(() {});
+              if (kDebugMode) {
+                print("Google Sheets initialized successfully.");
+              }
+              _handleInitialLinks();
+            })
+            .catchError((error) {
+              if (kDebugMode) {
+                print("Error initializing Google Sheets: $error");
+              }
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('Error initializing Google Sheets: $error'),
+                  ),
+                );
+              }
+            });
+      } else {
+        if (kDebugMode) {
+          print("Error: StockHomePage not mounted yet.");
+        }
+      }
+    });
   }
 
   Future<void> _handleInitialLinks() async {
-
     // Ongoing link stream while app is running
-    appLinks.uriLinkStream.listen((Uri uri) {
-      if (uri.scheme == 'stock135') {
-        //uri.toString returns stock135://wcp-0251%7Cincrement
-        // We just need to decode the utf8 into text
-        final livePayload = utf8.decode(uri.toString().codeUnits.toList()).replaceAll('%7C', '|');
-        debugPrint("Live app link received: $livePayload");
+    appLinks.uriLinkStream.listen(
+      (Uri uri) {
+        if (uri.scheme == 'stock135') {
+          //uri.toString returns stock135://wcp-0251%7Cincrement
+          // We just need to decode the utf8 into text
+          final livePayload = utf8
+              .decode(uri.toString().codeUnits.toList())
+              .replaceAll('%7C', '|');
+          debugPrint("Live app link received: $livePayload");
 
-        // If StockHomePage is already mounted, pass it to the handler
-        final state = _stockHomePageKey.currentState;
-        state?._processNfcContent(livePayload);
-      }
-    }, onError: (err) {
-      debugPrint("Error listening for app links: $err");
-    });
+          // If StockHomePage is already mounted, pass it to the handler
+          final state = _stockHomePageKey.currentState;
+          state!._processNfcContent(livePayload);
+        }
+      },
+      onError: (err) {
+        debugPrint("Error listening for app links: $err");
+      },
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      home: StockHomePage(
-        key: _stockHomePageKey,
-      ),
-    );
+    return MaterialApp(home: StockHomePage(key: _stockHomePageKey));
   }
 }
 
@@ -84,20 +116,7 @@ class _StockHomePageState extends State<StockHomePage> {
     super.initState();
     _loadSavedName();
     _loadSavedManualPartEntryEnabled();
-    _initSheets()
-        .then((_) {
-          setState(() {
-            isReady = true;
-          });
-          if (kDebugMode) {
-            print("Google Sheets initialized successfully.");
-          }
-        })
-        .catchError((error) {
-          if (kDebugMode) {
-            print("Error initializing Google Sheets: $error");
-          }
-        });
+
     _startNfc();
   }
 
@@ -139,14 +158,16 @@ class _StockHomePageState extends State<StockHomePage> {
     });
   }
 
-  Future<void> _initSheets() async {
+  Future<void> initSheets() async {
     final gsheets = GSheets(jsonDecode(googleSheetCredentials));
     final ss = await gsheets.spreadsheet(spreadsheetID);
+    log("Connected to Google Sheets: ${ss.url}");
     _stockSheet =
         ss.worksheetByTitle('Stock Count') ??
         await ss.addWorksheet('Stock Count');
     _timelineSheet =
         ss.worksheetByTitle('Timeline') ?? await ss.addWorksheet('Timeline');
+    isReady = true;
   }
 
   void _startNfc() async {
@@ -270,19 +291,25 @@ class _StockHomePageState extends State<StockHomePage> {
 
   Future<void> _lookupPart(String id) async {
     if (!isReady) {
-      if (kDebugMode) {
-        print("Google Sheets not ready yet.");
+      await initSheets();
+      print("Google Sheets not ready yet.");
+      //force an init of them
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Google Sheets not ready yet. Try again.'),
+          ),
+        );
       }
       return;
     }
     final rows = await _stockSheet.values.allRows();
     final match = rows.firstWhere(
-      (row) => row.isNotEmpty && row[0].trim() == id.trim(),
+      (row) => row.isNotEmpty && row[0].trim().toUpperCase() == (id.trim()),
       orElse: () => [],
     );
-    if (kDebugMode) {
-      print("Looking up part: $id, found: $match");
-    }
+
     if (match.isNotEmpty) {
       setState(() {
         partInfo = {
@@ -550,101 +577,101 @@ class _SettingsPageState extends State<SettingsPage> {
     isManualEntryEnabled = widget.manualPartEntryEnabled;
   }
 
-Future<void> _writeNfcTag() async {
-  if (partNameController.text.trim().isEmpty) {
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(const SnackBar(content: Text('Please enter a part name')));
-    return;
-  }
-
-  bool isAvailable = await NfcManager.instance.isAvailable();
-  if (!isAvailable) {
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('NFC is not available on this device')),
-      );
-    }
-    return;
-  }
-
-  setState(() => isWriting = true);
-
-  try {
-    final content = '${partNameController.text.trim()}|$selectedAction';
-    if (kDebugMode) {
-      print("Writing to NFC tag: $content");
-    }
-
-    await NfcManager.instance.startSession(
-      pollingOptions: {NfcPollingOption.iso14443},
-      onDiscovered: (NfcTag tag) async {
-        try {
-          final ndef = Ndef.from(tag);
-          if (ndef == null) {
-            throw 'This tag is not NDEF compatible';
-          }
-
-          if (!ndef.isWritable) {
-            throw 'This tag is not writable';
-          }
-
-          final content = '${partNameController.text.trim()}|$selectedAction';
-          final uriString = 'stock135://$content';
-          
-          // For URI records, the payload starts with a URI identifier byte
-          // 0x00 means no abbreviation (full URI)
-          final uriBytes = utf8.encode(uriString);
-          final payload = Uint8List(1 + uriBytes.length);
-          payload[0] = 0x00; // URI identifier byte for no abbreviation
-          payload.setRange(1, payload.length, uriBytes);
-
-          final message = NdefMessage(
-            records: [
-              NdefRecord(
-                typeNameFormat: TypeNameFormat.wellKnown,
-                type: Uint8List.fromList([0x55]), // 'U' for URI record
-                identifier: Uint8List(0),
-                payload: payload,
-              ),
-            ],
-          );
-
-          if (message.byteLength > ndef.maxSize) {
-            throw 'Content too long for this tag';
-          }
-
-          await ndef.write(message: message);
-
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('NFC tag written successfully!'),
-                backgroundColor: Colors.green,
-              ),
-            );
-          }
-        } catch (e) {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Error writing to tag: $e')),
-            );
-          }
-        } finally {
-          await NfcManager.instance.stopSession();
-          setState(() => isWriting = false);
-        }
-      },
-    );
-  } catch (e) {
-    if (mounted) {
+  Future<void> _writeNfcTag() async {
+    if (partNameController.text.trim().isEmpty) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Error: $e')));
+      ).showSnackBar(const SnackBar(content: Text('Please enter a part name')));
+      return;
     }
-    setState(() => isWriting = false);
+
+    bool isAvailable = await NfcManager.instance.isAvailable();
+    if (!isAvailable) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('NFC is not available on this device')),
+        );
+      }
+      return;
+    }
+
+    setState(() => isWriting = true);
+
+    try {
+      final content = '${partNameController.text.trim()}|$selectedAction';
+      if (kDebugMode) {
+        print("Writing to NFC tag: $content");
+      }
+
+      await NfcManager.instance.startSession(
+        pollingOptions: {NfcPollingOption.iso14443},
+        onDiscovered: (NfcTag tag) async {
+          try {
+            final ndef = Ndef.from(tag);
+            if (ndef == null) {
+              throw 'This tag is not NDEF compatible';
+            }
+
+            if (!ndef.isWritable) {
+              throw 'This tag is not writable';
+            }
+
+            final content = '${partNameController.text.trim()}|$selectedAction';
+            final uriString = 'stock135://$content';
+
+            // For URI records, the payload starts with a URI identifier byte
+            // 0x00 means no abbreviation (full URI)
+            final uriBytes = utf8.encode(uriString);
+            final payload = Uint8List(1 + uriBytes.length);
+            payload[0] = 0x00; // URI identifier byte for no abbreviation
+            payload.setRange(1, payload.length, uriBytes);
+
+            final message = NdefMessage(
+              records: [
+                NdefRecord(
+                  typeNameFormat: TypeNameFormat.wellKnown,
+                  type: Uint8List.fromList([0x55]), // 'U' for URI record
+                  identifier: Uint8List(0),
+                  payload: payload,
+                ),
+              ],
+            );
+
+            if (message.byteLength > ndef.maxSize) {
+              throw 'Content too long for this tag';
+            }
+
+            await ndef.write(message: message);
+
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('NFC tag written successfully!'),
+                  backgroundColor: Colors.green,
+                ),
+              );
+            }
+          } catch (e) {
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('Error writing to tag: $e')),
+              );
+            }
+          } finally {
+            await NfcManager.instance.stopSession();
+            setState(() => isWriting = false);
+          }
+        },
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error: $e')));
+      }
+      setState(() => isWriting = false);
+    }
   }
-}
 
   @override
   Widget build(BuildContext context) {
