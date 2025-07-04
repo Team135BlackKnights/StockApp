@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:developer';
 
 import 'package:flutter/foundation.dart';
@@ -31,7 +32,6 @@ class _MyAppState extends State<MyApp> {
   void initState() {
     super.initState();
     appLinks = AppLinks();
-
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final state = _stockHomePageKey.currentState;
       if (state != null) {
@@ -51,7 +51,8 @@ class _MyAppState extends State<MyApp> {
               if (mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
-                    content: Text('Error initializing Google Sheets: $error'), behavior: SnackBarBehavior.floating,
+                    content: Text('Error initializing Google Sheets: $error'),
+                    behavior: SnackBarBehavior.floating,
                   ),
                 );
               }
@@ -171,7 +172,6 @@ class _StockHomePageState extends State<StockHomePage> {
     super.initState();
     _loadSavedName();
     _loadSavedManualPartEntryEnabled();
-
     _startNfc();
   }
 
@@ -235,9 +235,12 @@ class _StockHomePageState extends State<StockHomePage> {
       pollingOptions: {NfcPollingOption.iso14443},
       invalidateAfterFirstReadIos: false,
       alertMessageIos: 'Hold your phone near an NFC tag to read it',
-      onSessionErrorIos: (p0) => ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text("NFC session error: $p0"), behavior: SnackBarBehavior.floating,)),
+      onSessionErrorIos: (p0) => ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text("NFC session error: $p0"),
+          behavior: SnackBarBehavior.floating,
+        ),
+      ),
       onDiscovered: (NfcTag tag) async {
         await _handleNfcTag(tag);
         // Wait for more tags.  This is important to allow multiple reads without restarting the session.
@@ -278,9 +281,12 @@ class _StockHomePageState extends State<StockHomePage> {
         print("Error handling NFC tag: $e");
       }
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Error reading NFC tag: $e'), behavior: SnackBarBehavior.floating,));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error reading NFC tag: $e'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
       }
     }
   }
@@ -302,9 +308,12 @@ class _StockHomePageState extends State<StockHomePage> {
 
     if (partInfo == null) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Part not found: $partName'), behavior: SnackBarBehavior.floating,));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Part not found: $partName'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
       }
       return;
     }
@@ -317,8 +326,8 @@ class _StockHomePageState extends State<StockHomePage> {
             SnackBar(
               content: Text(
                 '${partInfo!['name']} incremented to ${partInfo!['count']}',
-                
-              ), behavior: SnackBarBehavior.floating,
+              ),
+              behavior: SnackBarBehavior.floating,
             ),
           );
         }
@@ -330,7 +339,8 @@ class _StockHomePageState extends State<StockHomePage> {
             SnackBar(
               content: Text(
                 '${partInfo!['name']} decremented to ${partInfo!['count']}',
-              ), behavior: SnackBarBehavior.floating,
+              ),
+              behavior: SnackBarBehavior.floating,
             ),
           );
         }
@@ -353,7 +363,8 @@ class _StockHomePageState extends State<StockHomePage> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Google Sheets not ready yet. Try again.'), behavior: SnackBarBehavior.floating,
+            content: Text('Google Sheets not ready yet. Try again.'),
+            behavior: SnackBarBehavior.floating,
           ),
         );
       }
@@ -407,9 +418,12 @@ class _StockHomePageState extends State<StockHomePage> {
   void _openLink(String url) async {
     if (url.isEmpty || url.trim().isEmpty) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('No URL provided'), behavior: SnackBarBehavior.floating,));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('No URL provided'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
       }
       return;
     }
@@ -484,9 +498,12 @@ class _StockHomePageState extends State<StockHomePage> {
         print("Error parsing URL: $e");
       }
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Invalid URL format: $url'), behavior: SnackBarBehavior.floating,));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Invalid URL format: $url'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
       }
     }
   }
@@ -629,6 +646,21 @@ class _StockHomePageState extends State<StockHomePage> {
                               fontSize: 18,
                               fontWeight: FontWeight.bold,
                             ),
+                          ),
+                          const Spacer(),
+                          IconButton(
+                            icon: const Icon(Icons.refresh),
+                            tooltip: 'Refresh',
+                            onPressed: () async {
+                              bool isAvailable = await NfcManager.instance
+                                  .isAvailable();
+                              setState(() {
+                                runningNFC = isAvailable;
+                              });
+                              if (isAvailable && !runningNFC) {
+                                _startNfc(); // Start NFC session if available and not running
+                              }
+                            },
                           ),
                         ],
                       ),
@@ -986,9 +1018,12 @@ class _SettingsPageState extends State<SettingsPage> {
 
   Future<void> _writeNfcTag() async {
     if (partNameController.text.trim().isEmpty) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Please enter a part name'), behavior: SnackBarBehavior.floating,));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please enter a part name'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
       return;
     }
 
@@ -996,7 +1031,10 @@ class _SettingsPageState extends State<SettingsPage> {
     if (!isAvailable) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('NFC is not available on this device'), behavior: SnackBarBehavior.floating,),
+          const SnackBar(
+            content: Text('NFC is not available on this device'),
+            behavior: SnackBarBehavior.floating,
+          ),
         );
       }
       return;
@@ -1062,7 +1100,10 @@ class _SettingsPageState extends State<SettingsPage> {
           } catch (e) {
             if (mounted) {
               ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('Error writing to tag: $e'), behavior: SnackBarBehavior.floating,),
+                SnackBar(
+                  content: Text('Error writing to tag: $e'),
+                  behavior: SnackBarBehavior.floating,
+                ),
               );
             }
           } finally {
@@ -1073,9 +1114,12 @@ class _SettingsPageState extends State<SettingsPage> {
       );
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Error: $e'), behavior: SnackBarBehavior.floating,));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error: $e'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
       }
       setState(() => isWriting = false);
     }
