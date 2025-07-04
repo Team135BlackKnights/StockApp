@@ -23,7 +23,6 @@ class MyApp extends StatefulWidget {
 }
 
 class _MyAppState extends State<MyApp> {
-  String? initialPayload;
   late final AppLinks appLinks;
   final GlobalKey<_StockHomePageState> _stockHomePageKey = GlobalKey();
   @override
@@ -34,22 +33,13 @@ class _MyAppState extends State<MyApp> {
   }
 
   Future<void> _handleInitialLinks() async {
-     try {
-      // Initial link (e.g., app booted from stock135:// URI)
-      final initialUri = await appLinks.getInitialLink();
-      if (initialUri != null && initialUri.scheme == 'stock135') {
-        setState(() {
-          initialPayload = initialUri.path + (initialUri.query.isNotEmpty ? '?${initialUri.query}' : '');
-        });
-      }
-    } catch (e) {
-      debugPrint("Error parsing initial app link: $e");
-    }
 
     // Ongoing link stream while app is running
     appLinks.uriLinkStream.listen((Uri uri) {
       if (uri.scheme == 'stock135') {
-        final livePayload = uri.path + (uri.query.isNotEmpty ? '?${uri.query}' : '');
+        //uri.toString returns stock135://wcp-0251%7Cincrement
+        // We just need to decode the utf8 into text
+        final livePayload = utf8.decode(uri.toString().codeUnits.toList()).replaceAll('%7C', '|');
         debugPrint("Live app link received: $livePayload");
 
         // If StockHomePage is already mounted, pass it to the handler
@@ -66,7 +56,6 @@ class _MyAppState extends State<MyApp> {
     return MaterialApp(
       home: StockHomePage(
         key: _stockHomePageKey,
-        initialPayload: initialPayload,
       ),
     );
   }
@@ -102,9 +91,6 @@ class _StockHomePageState extends State<StockHomePage> {
           });
           if (kDebugMode) {
             print("Google Sheets initialized successfully.");
-          }
-          if (widget.initialPayload != null) {
-            _processNfcContent(widget.initialPayload!);
           }
         })
         .catchError((error) {
@@ -231,8 +217,9 @@ class _StockHomePageState extends State<StockHomePage> {
       }
       return;
     }
-
-    final partName = parts[0];
+    //parts [0] looks like "135://PARTNAME", we only need the part name
+    //parts [1] looks like "increment" or "decrement" or "drawing"
+    final partName = parts[0].split('://').last.trim().toUpperCase();
     final action = parts[1];
 
     await _lookupPart(partName);
@@ -293,6 +280,9 @@ class _StockHomePageState extends State<StockHomePage> {
       (row) => row.isNotEmpty && row[0].trim() == id.trim(),
       orElse: () => [],
     );
+    if (kDebugMode) {
+      print("Looking up part: $id, found: $match");
+    }
     if (match.isNotEmpty) {
       setState(() {
         partInfo = {
@@ -560,96 +550,101 @@ class _SettingsPageState extends State<SettingsPage> {
     isManualEntryEnabled = widget.manualPartEntryEnabled;
   }
 
-  Future<void> _writeNfcTag() async {
-    if (partNameController.text.trim().isEmpty) {
+Future<void> _writeNfcTag() async {
+  if (partNameController.text.trim().isEmpty) {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('Please enter a part name')));
+    return;
+  }
+
+  bool isAvailable = await NfcManager.instance.isAvailable();
+  if (!isAvailable) {
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('NFC is not available on this device')),
+      );
+    }
+    return;
+  }
+
+  setState(() => isWriting = true);
+
+  try {
+    final content = '${partNameController.text.trim()}|$selectedAction';
+    if (kDebugMode) {
+      print("Writing to NFC tag: $content");
+    }
+
+    await NfcManager.instance.startSession(
+      pollingOptions: {NfcPollingOption.iso14443},
+      onDiscovered: (NfcTag tag) async {
+        try {
+          final ndef = Ndef.from(tag);
+          if (ndef == null) {
+            throw 'This tag is not NDEF compatible';
+          }
+
+          if (!ndef.isWritable) {
+            throw 'This tag is not writable';
+          }
+
+          final content = '${partNameController.text.trim()}|$selectedAction';
+          final uriString = 'stock135://$content';
+          
+          // For URI records, the payload starts with a URI identifier byte
+          // 0x00 means no abbreviation (full URI)
+          final uriBytes = utf8.encode(uriString);
+          final payload = Uint8List(1 + uriBytes.length);
+          payload[0] = 0x00; // URI identifier byte for no abbreviation
+          payload.setRange(1, payload.length, uriBytes);
+
+          final message = NdefMessage(
+            records: [
+              NdefRecord(
+                typeNameFormat: TypeNameFormat.wellKnown,
+                type: Uint8List.fromList([0x55]), // 'U' for URI record
+                identifier: Uint8List(0),
+                payload: payload,
+              ),
+            ],
+          );
+
+          if (message.byteLength > ndef.maxSize) {
+            throw 'Content too long for this tag';
+          }
+
+          await ndef.write(message: message);
+
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('NFC tag written successfully!'),
+                backgroundColor: Colors.green,
+              ),
+            );
+          }
+        } catch (e) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Error writing to tag: $e')),
+            );
+          }
+        } finally {
+          await NfcManager.instance.stopSession();
+          setState(() => isWriting = false);
+        }
+      },
+    );
+  } catch (e) {
+    if (mounted) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('Please enter a part name')));
-      return;
+      ).showSnackBar(SnackBar(content: Text('Error: $e')));
     }
-
-    bool isAvailable = await NfcManager.instance.isAvailable();
-    if (!isAvailable) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('NFC is not available on this device')),
-        );
-      }
-      return;
-    }
-
-    setState(() => isWriting = true);
-
-    try {
-      final content = '${partNameController.text.trim()}|$selectedAction';
-      if (kDebugMode) {
-        print("Writing to NFC tag: $content");
-      }
-
-      await NfcManager.instance.startSession(
-        pollingOptions: {NfcPollingOption.iso14443},
-        onDiscovered: (NfcTag tag) async {
-          try {
-            final ndef = Ndef.from(tag);
-            if (ndef == null) {
-              throw 'This tag is not NDEF compatible';
-            }
-
-            if (!ndef.isWritable) {
-              throw 'This tag is not writable';
-            }
-
-            final content = '${partNameController.text.trim()}|$selectedAction';
-
-            final uri = Uri.parse('stock135://$content');
-            final uriBytes = utf8.encode(uri.toString());
-
-            final message = NdefMessage(
-              records: [
-                NdefRecord(
-                  typeNameFormat: TypeNameFormat.wellKnown,
-                  type: Uint8List.fromList([0x55]), // '0x55' is for URI type
-                  identifier: Uint8List(0),
-                  payload: Uint8List.fromList(uriBytes),
-                ),
-              ],
-            );
-
-            if (message.byteLength > ndef.maxSize) {
-              throw 'Content too long for this tag';
-            }
-
-            await ndef.write(message: message);
-
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('NFC tag written successfully!'),
-                  backgroundColor: Colors.green,
-                ),
-              );
-            }
-          } catch (e) {
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('Error writing to tag: $e')),
-              );
-            }
-          } finally {
-            await NfcManager.instance.stopSession();
-            setState(() => isWriting = false);
-          }
-        },
-      );
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Error: $e')));
-      }
-      setState(() => isWriting = false);
-    }
+    setState(() => isWriting = false);
   }
+}
 
   @override
   Widget build(BuildContext context) {
