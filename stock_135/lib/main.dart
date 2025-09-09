@@ -46,6 +46,7 @@ class _MyAppState extends State<MyApp> {
             })
             .catchError((error) {
               if (kDebugMode) {
+                print(error);
                 print("Error initializing Google Sheets: $error");
               }
               if (mounted) {
@@ -325,7 +326,7 @@ class _StockHomePageState extends State<StockHomePage> {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text(
-                '${partInfo!['name']} incremented to ${partInfo!['count']}',
+                '${partInfo!['humanName']} incremented to ${partInfo!['count']}',
               ),
               behavior: SnackBarBehavior.floating,
             ),
@@ -338,7 +339,7 @@ class _StockHomePageState extends State<StockHomePage> {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text(
-                '${partInfo!['name']} decremented to ${partInfo!['count']}',
+                '${partInfo!['humanName']} decremented to ${partInfo!['count']}',
               ),
               behavior: SnackBarBehavior.floating,
             ),
@@ -372,17 +373,24 @@ class _StockHomePageState extends State<StockHomePage> {
     }
     final rows = await _stockSheet.values.allRows();
     final match = rows.firstWhere(
-      (row) => row.isNotEmpty && row[0].trim().toUpperCase() == (id.trim()),
+      (row) {
+        if (row.length == 1) {
+          // skip
+          return false;
+        }
+        return row.isNotEmpty && row[1].trim().toUpperCase() == (id.trim().toUpperCase());
+      },
       orElse: () => [],
     );
 
     if (match.isNotEmpty) {
       setState(() {
         partInfo = {
-          'name': match[0],
-          'count': int.tryParse(match[1]) ?? 0,
-          'cad': match[2],
-          'drawing': match[3],
+          'humanName': match[0],
+          'name': match[1],
+          'count': int.tryParse(match[2]) ?? 0,
+          'cad': match[3],
+          'drawing': match[4],
         };
       });
     } else {
@@ -395,24 +403,76 @@ class _StockHomePageState extends State<StockHomePage> {
   Future<void> _updateCount(bool increment) async {
     if (partInfo == null) return;
     final rows = await _stockSheet.values.allRows();
-    final index = rows.indexWhere((row) => row[0].trim() == partInfo!['name']);
+    final index = rows.indexWhere(
+      (row) {
+        if (row.length == 1) {
+          // skip
+          return false;
+        }
+        return row.isNotEmpty && row[1].trim().toUpperCase() == partInfo!['name'].trim().toUpperCase();
+      },
+    );
     if (index == -1) return;
+    if (partInfo!['humanName'].contains('Laptop')) {
+      // Handle case where its actually a SIGNOUT device.
+      bool isCheckedOutAlready = partInfo!['count'] == 1; 
+      if (isCheckedOutAlready && increment) {
+        //BAD
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Device already checked out! Return it first from ${partInfo!['cad']}.'),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+        return;
+      } 
+      if (!isCheckedOutAlready && !increment){
+        //BAD
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Device not checked out, cannot return!'),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+        return;
+      }
+      //All good, save the current user as the one who checked it out in partInfo[cad]
+      await _stockSheet.values.insertValue(increment ? 1 : 0, column: 3, row: index + 1);
+      await _stockSheet.values.insertValue(increment ? savedName : '', column: 4, row: index + 1);
+      await _timelineSheet.values.appendRow([
+        partInfo!['name'],
+        savedName,
+        increment ? 'Checked Out' : 'Returned',
+        increment ? '1' : '0',
+        DateFormat.jm().format(DateTime.now()),
+        DateFormat.yMMMd().format(DateTime.now()),
+      ]);
+      setState(() {
+        partInfo!['cad'] = increment ? savedName : '';
+        partInfo!['count'] = increment ? 1 : 0;
+      });
+    } else { //NOT a "Signout"
+      int newCount = partInfo!['count'] + (increment ? 1 : -1);
+      newCount = newCount < 0 ? 0 : newCount;
 
-    int newCount = partInfo!['count'] + (increment ? 1 : -1);
-    newCount = newCount < 0 ? 0 : newCount;
+      await _stockSheet.values.insertValue(newCount, column: 3, row: index + 1);
 
-    await _stockSheet.values.insertValue(newCount, column: 2, row: index + 1);
+      await _timelineSheet.values.appendRow([
+        partInfo!['name'],
+        savedName,
+        increment ? 'Increment' : 'Decrement',
+        newCount.toString(),
+        DateFormat.jm().format(DateTime.now()),
+        DateFormat.yMMMd().format(DateTime.now()),
+      ]);
+      setState(() =>         partInfo!['count'] = newCount);
+    }
+    
 
-    await _timelineSheet.values.appendRow([
-      partInfo!['name'],
-      savedName,
-      increment ? 'Increment' : 'Decrement',
-      newCount.toString(),
-      DateFormat.jm().format(DateTime.now()),
-      DateFormat.yMMMd().format(DateTime.now()),
-    ]);
-
-    setState(() => partInfo!['count'] = newCount);
   }
 
   void _openLink(String url) async {
@@ -800,7 +860,7 @@ class _StockHomePageState extends State<StockHomePage> {
                         ),
                         const SizedBox(height: 16),
 
-                        // Part Name
+                        // Part Name (more legible)
                         Container(
                           padding: const EdgeInsets.all(16),
                           decoration: BoxDecoration(
@@ -815,6 +875,16 @@ class _StockHomePageState extends State<StockHomePage> {
                               Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
+                                  // Human-friendly title: larger and clearer
+                                  Text(
+                                    partInfo!['humanName'],
+                                    style: const TextStyle(
+                                      fontSize: 20,
+                                      fontWeight: FontWeight.bold,
+                                      color: Color(0xFF1976D2),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 6),
                                   const Text(
                                     'Part Number',
                                     style: TextStyle(
@@ -826,8 +896,8 @@ class _StockHomePageState extends State<StockHomePage> {
                                   Text(
                                     partInfo!['name'],
                                     style: const TextStyle(
-                                      fontSize: 18,
-                                      fontWeight: FontWeight.bold,
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w600,
                                       color: Color(0xFF1976D2),
                                     ),
                                   ),
@@ -839,42 +909,109 @@ class _StockHomePageState extends State<StockHomePage> {
 
                         const SizedBox(height: 12),
 
-                        // Stock Count
-                        Container(
-                          padding: const EdgeInsets.all(16),
-                          decoration: BoxDecoration(
-                            color: Colors.green[50],
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: Colors.green[200]!),
-                          ),
-                          child: Row(
-                            children: [
-                              const Icon(Icons.inventory, color: Colors.green),
-                              const SizedBox(width: 12),
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
+                        // Stock Count or Signout status for devices
+                        Builder(builder: (context) {
+                          final isLaptop = partInfo!['humanName']
+                                  .toString()
+                                  .toLowerCase()
+                                  .contains('laptop');
+                          final isCheckedOut = partInfo!['count'] == 1;
+
+                          if (isLaptop) {
+                            // For signout devices show checked out user instead of numeric stock
+                            return Container(
+                              padding: const EdgeInsets.all(16),
+                              decoration: BoxDecoration(
+                                color: isCheckedOut ? Colors.orange[50] : Colors.green[50],
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(
+                                    color: isCheckedOut ? Colors.orange[200]! : Colors.green[200]!),
+                              ),
+                              child: Row(
                                 children: [
-                                  const Text(
-                                    'Current Stock',
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      color: Colors.grey,
-                                      fontWeight: FontWeight.w500,
-                                    ),
+                                  Icon(
+                                    isCheckedOut ? Icons.person : Icons.check_circle,
+                                    color: isCheckedOut ? Colors.orange : Colors.green,
                                   ),
-                                  Text(
-                                    '${partInfo!['count']} units',
-                                    style: const TextStyle(
-                                      fontSize: 18,
-                                      fontWeight: FontWeight.bold,
-                                      color: Colors.green,
-                                    ),
+                                  const SizedBox(width: 12),
+                                  Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      const Text(
+                                        'Status',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: Colors.grey,
+                                          fontWeight: FontWeight.w500,
+                                        ),
+                                      ),
+                                      if (isCheckedOut) ...[
+                                        const Text(
+                                          'Checked out to',
+                                          style: TextStyle(fontSize: 12, color: Colors.grey),
+                                        ),
+                                        Text(
+                                          partInfo!['cad'] ?? 'Unknown',
+                                          style: const TextStyle(
+                                            fontSize: 16,
+                                            fontWeight: FontWeight.bold,
+                                            color: Colors.orange,
+                                          ),
+                                        ),
+                                      ] else ...[
+                                        const Text(
+                                          'Available',
+                                          style: TextStyle(
+                                            fontSize: 18,
+                                            fontWeight: FontWeight.bold,
+                                            color: Colors.green,
+                                          ),
+                                        ),
+                                      ],
+                                    ],
                                   ),
                                 ],
                               ),
-                            ],
-                          ),
-                        ),
+                            );
+                          }
+
+                          // Default stock display for non-signout parts
+                          return Container(
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              color: Colors.green[50],
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: Colors.green[200]!),
+                            ),
+                            child: Row(
+                              children: [
+                                const Icon(Icons.inventory, color: Colors.green),
+                                const SizedBox(width: 12),
+                                Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Text(
+                                      'Current Stock',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: Colors.grey,
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                    ),
+                                    Text(
+                                      '${partInfo!['count']} units',
+                                      style: const TextStyle(
+                                        fontSize: 18,
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.green,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          );
+                        }),
 
                         const SizedBox(height: 20),
 
@@ -889,82 +1026,122 @@ class _StockHomePageState extends State<StockHomePage> {
                         ),
                         const SizedBox(height: 12),
 
-                        // Increment/Decrement Buttons
-                        Row(
-                          children: [
-                            Expanded(
-                              child: ElevatedButton.icon(
-                                onPressed: () => _updateCount(true),
-                                icon: const Icon(Icons.add),
-                                label: FittedBox(
-                                  fit: BoxFit.scaleDown,
-                                  child: const Text('Add (+1)'),
+                        // Render actions differently for 'Laptop' signout devices
+                        Builder(builder: (context) {
+                          final isLaptop = partInfo!['humanName']
+                              .toString()
+                              .toLowerCase()
+                              .contains('laptop');
+                          final isCheckedOut = partInfo!['count'] == 1;
+
+                          if (isLaptop) {
+                            return Row(
+                              children: [
+                                Expanded(
+                                  child: ElevatedButton.icon(
+                                    onPressed: () => _updateCount(!isCheckedOut),
+                                    icon: Icon(isCheckedOut ? Icons.logout : Icons.login),
+                                    label: FittedBox(
+                                      fit: BoxFit.scaleDown,
+                                      child: Text(isCheckedOut ? 'Sign Out' : 'Sign In'),
+                                    ),
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor:
+                                          isCheckedOut ? Colors.red : Colors.green,
+                                      foregroundColor: Colors.white,
+                                    ),
+                                  ),
                                 ),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.green,
-                                  foregroundColor: Colors.white,
+                              ],
+                            );
+                          }
+
+                          // Non-laptop: normal increment/decrement
+                          return Row(
+                            children: [
+                              Expanded(
+                                child: ElevatedButton.icon(
+                                  onPressed: () => _updateCount(true),
+                                  icon: const Icon(Icons.add),
+                                  label: FittedBox(
+                                    fit: BoxFit.scaleDown,
+                                    child: const Text('Add (+1)'),
+                                  ),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: Colors.green,
+                                    foregroundColor: Colors.white,
+                                  ),
                                 ),
                               ),
-                            ),
-                            const SizedBox(width: 3),
-                            Expanded(
-                              child: ElevatedButton.icon(
-                                onPressed: () => _updateCount(false),
-                                icon: const Icon(Icons.remove),
-                                label: FittedBox(
-                                  fit: BoxFit.scaleDown,
-                                  child: const Text('Remove (-1)'),
-                                ),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.red,
-                                  foregroundColor: Colors.white,
+                              const SizedBox(width: 3),
+                              Expanded(
+                                child: ElevatedButton.icon(
+                                  onPressed: () => _updateCount(false),
+                                  icon: const Icon(Icons.remove),
+                                  label: FittedBox(
+                                    fit: BoxFit.scaleDown,
+                                    child: const Text('Remove (-1)'),
+                                  ),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: Colors.red,
+                                    foregroundColor: Colors.white,
+                                  ),
                                 ),
                               ),
-                            ),
-                          ],
-                        ),
+                            ],
+                          );
+                        }),
 
                         const SizedBox(height: 12),
 
-                        // View Links
-                        Row(
-                          children: [
-                            Expanded(
-                              child: OutlinedButton.icon(
-                                onPressed: () => _openLink(partInfo!['cad']),
-                                icon: const Icon(Icons.view_in_ar),
-                                label: FittedBox(
-                                  fit: BoxFit.scaleDown,
-                                  child: const Text('View CAD'),
-                                ),
-                                style: OutlinedButton.styleFrom(
-                                  foregroundColor: const Color(0xFF1976D2),
-                                  side: const BorderSide(
-                                    color: Color(0xFF1976D2),
+                        // View Links (hidden for Laptop signout devices)
+                        Builder(builder: (context) {
+                          final isLaptop = partInfo!['humanName']
+                              .toString()
+                              .toLowerCase()
+                              .contains('laptop');
+                          if (isLaptop) {
+                            return const SizedBox.shrink();
+                          }
+
+                          return Row(
+                            children: [
+                              Expanded(
+                                child: OutlinedButton.icon(
+                                  onPressed: () => _openLink(partInfo!['cad']),
+                                  icon: const Icon(Icons.view_in_ar),
+                                  label: FittedBox(
+                                    fit: BoxFit.scaleDown,
+                                    child: const Text('View CAD'),
+                                  ),
+                                  style: OutlinedButton.styleFrom(
+                                    foregroundColor: const Color(0xFF1976D2),
+                                    side: const BorderSide(
+                                      color: Color(0xFF1976D2),
+                                    ),
                                   ),
                                 ),
                               ),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: OutlinedButton.icon(
-                                onPressed: () =>
-                                    _openLink(partInfo!['drawing']),
-                                icon: const Icon(Icons.picture_as_pdf),
-                                label: FittedBox(
-                                  fit: BoxFit.scaleDown,
-                                  child: const Text('View Drawing'),
-                                ),
-                                style: OutlinedButton.styleFrom(
-                                  foregroundColor: const Color(0xFF1976D2),
-                                  side: const BorderSide(
-                                    color: Color(0xFF1976D2),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: OutlinedButton.icon(
+                                  onPressed: () => _openLink(partInfo!['drawing']),
+                                  icon: const Icon(Icons.picture_as_pdf),
+                                  label: FittedBox(
+                                    fit: BoxFit.scaleDown,
+                                    child: const Text('View Drawing'),
+                                  ),
+                                  style: OutlinedButton.styleFrom(
+                                    foregroundColor: const Color(0xFF1976D2),
+                                    side: const BorderSide(
+                                      color: Color(0xFF1976D2),
+                                    ),
                                   ),
                                 ),
                               ),
-                            ),
-                          ],
-                        ),
+                            ],
+                          );
+                        }),
                       ],
                     ),
                   ),
