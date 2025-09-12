@@ -391,6 +391,7 @@ class _StockHomePageState extends State<StockHomePage> {
           'count': int.tryParse(match[2]) ?? 0,
           'cad': match[3],
           'drawing': match[4],
+          'isCheckOut': (match.length > 6 && match[6].toString().toLowerCase().contains('y')),
         };
       });
     } else {
@@ -412,8 +413,8 @@ class _StockHomePageState extends State<StockHomePage> {
         return row.isNotEmpty && row[1].trim().toUpperCase() == partInfo!['name'].trim().toUpperCase();
       },
     );
-    if (index == -1) return;
-    if (partInfo!['humanName'].contains('Laptop')) {
+  if (index == -1) return;
+  if (partInfo!['isCheckOut'] == true) {
       // Handle case where its actually a SIGNOUT device.
       bool isCheckedOutAlready = partInfo!['count'] == 1; 
       if (isCheckedOutAlready && increment) {
@@ -911,13 +912,10 @@ class _StockHomePageState extends State<StockHomePage> {
 
                         // Stock Count or Signout status for devices
                         Builder(builder: (context) {
-                          final isLaptop = partInfo!['humanName']
-                                  .toString()
-                                  .toLowerCase()
-                                  .contains('laptop');
+                          final isCheckOut = partInfo!['isCheckOut'] == true;
                           final isCheckedOut = partInfo!['count'] == 1;
 
-                          if (isLaptop) {
+                          if (isCheckOut) {
                             // For signout devices show checked out user instead of numeric stock
                             return Container(
                               padding: const EdgeInsets.all(16),
@@ -1028,13 +1026,10 @@ class _StockHomePageState extends State<StockHomePage> {
 
                         // Render actions differently for 'Laptop' signout devices
                         Builder(builder: (context) {
-                          final isLaptop = partInfo!['humanName']
-                              .toString()
-                              .toLowerCase()
-                              .contains('laptop');
+                          final isCheckOut = partInfo!['isCheckOut'] == true;
                           final isCheckedOut = partInfo!['count'] == 1;
 
-                          if (isLaptop) {
+                          if (isCheckOut) {
                             return Row(
                               children: [
                                 Expanded(
@@ -1096,11 +1091,8 @@ class _StockHomePageState extends State<StockHomePage> {
 
                         // View Links (hidden for Laptop signout devices)
                         Builder(builder: (context) {
-                          final isLaptop = partInfo!['humanName']
-                              .toString()
-                              .toLowerCase()
-                              .contains('laptop');
-                          if (isLaptop) {
+                          final isCheckOut = partInfo!['isCheckOut'] == true;
+                          if (isCheckOut) {
                             return const SizedBox.shrink();
                           }
 
